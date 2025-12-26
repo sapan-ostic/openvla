@@ -2,13 +2,15 @@
 """
 OpenVLA Smoke Test: Multi-sample inference script with BridgeDataV2.
 
-Loads openvla-7b model and runs inference on samples from BridgeDataV2 dataset.
+Loads openvla-7b model and runs inference on episodes from BridgeDataV2 dataset.
 Generates comparison plots and GIFs for each episode.
 
 Usage:
-    python smoke_test/smoke_test.py
-    python smoke_test/smoke_test.py --max_steps 20
-    python smoke_test/smoke_test.py --output_dir ./my_outputs
+    python smoke_test/smoke_test.py                          # Run episode 0 from each tfrecord
+    python smoke_test/smoke_test.py --num_episodes 5         # Run first 5 episodes from each tfrecord
+    python smoke_test/smoke_test.py --episode_index 3        # Run episode 3 (0-indexed) from each tfrecord
+    python smoke_test/smoke_test.py --max_steps 20           # Limit to 20 steps per episode
+    python smoke_test/smoke_test.py --output_dir ./outputs   # Custom output directory
 """
 
 import os
@@ -28,7 +30,6 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 # ============================================================================
 TFRECORD_SAMPLES = [
     "/home/sapan-alienware/datasets/rlds/bridge_orig/1.0.0/bridge_dataset-train.tfrecord-00000-of-01024",
-    "/home/sapan-alienware/datasets/rlds/bridge_orig/1.0.0/bridge_dataset-train.tfrecord-00001-of-01024",
     # Add more samples here:
     # "/path/to/bridge_dataset-train.tfrecord-00002-of-01024",
 ]
@@ -59,8 +60,30 @@ def download_if_missing(tfrecord_path: str) -> bool:
         return False
 
 
-def load_episode(tfrecord_path: str, max_steps: int = 20):
-    """Load full episode from BridgeDataV2 tfrecord file."""
+def count_episodes(tfrecord_path: str) -> int:
+    """Count total number of episodes in a tfrecord file."""
+    import tensorflow as tf
+    tf.config.set_visible_devices([], "GPU")
+    
+    raw_dataset = tf.data.TFRecordDataset(tfrecord_path)
+    count = 0
+    for _ in raw_dataset:
+        count += 1
+    return count
+
+
+def load_episode(tfrecord_path: str, episode_index: int = 0, max_steps: int = 20):
+    """
+    Load a specific episode from BridgeDataV2 tfrecord file.
+    
+    Args:
+        tfrecord_path: Path to the tfrecord file
+        episode_index: Which episode to load (0-indexed). Each tfrecord contains ~50 episodes.
+        max_steps: Maximum number of steps to load from the episode
+    
+    Returns:
+        images, gt_actions, instruction, num_steps, total_episodes
+    """
     import tensorflow as tf
     tf.config.set_visible_devices([], "GPU")
     
@@ -72,25 +95,40 @@ def load_episode(tfrecord_path: str, max_steps: int = 20):
     
     raw_dataset = tf.data.TFRecordDataset(tfrecord_path)
     
-    for raw_record in raw_dataset.take(1):
-        example = tf.io.parse_single_example(raw_record, feature_description)
-        images_raw = example['steps/observation/image_0']
-        actions_raw = example['steps/action']
-        instructions = example['steps/language_instruction']
-        
-        instruction = instructions[0].numpy().decode('utf-8') if len(instructions) > 0 else "manipulate object"
-        num_steps = min(max_steps, len(images_raw))
-        
-        images = []
-        gt_actions = []
-        for i in range(num_steps):
-            img = tf.io.decode_jpeg(images_raw[i])
-            images.append(Image.fromarray(img.numpy()))
-            gt_actions.append(actions_raw[i].numpy())
-        
-        return images, np.array(gt_actions), instruction, num_steps
+    # Single pass: iterate through dataset, process target episode, count total
+    target_data = None
+    total_episodes = 0
     
-    return None, None, None, 0
+    for idx, raw_record in enumerate(raw_dataset):
+        total_episodes += 1
+        
+        # Only process the episode we want
+        if idx == episode_index:
+            example = tf.io.parse_single_example(raw_record, feature_description)
+            images_raw = example['steps/observation/image_0']
+            actions_raw = example['steps/action']
+            instructions = example['steps/language_instruction']
+            
+            instruction = instructions[0].numpy().decode('utf-8') if len(instructions) > 0 else "manipulate object"
+            num_steps = min(max_steps, len(images_raw))
+            
+            images = []
+            gt_actions = []
+            for i in range(num_steps):
+                img = tf.io.decode_jpeg(images_raw[i])
+                images.append(Image.fromarray(img.numpy()))
+                gt_actions.append(actions_raw[i].numpy())
+            
+            target_data = (images, np.array(gt_actions), instruction, num_steps)
+    
+    # Return results
+    if target_data is None:
+        if episode_index >= total_episodes:
+            print(f"  WARNING: episode_index {episode_index} >= total episodes {total_episodes}")
+        return None, None, None, 0, total_episodes
+    
+    images, gt_actions, instruction, num_steps = target_data
+    return images, gt_actions, instruction, num_steps, total_episodes
 
 
 def run_inference(model, processor, images, instruction, device):
@@ -267,11 +305,20 @@ def generate_plots(images, gt_actions, pred_actions, instruction, output_dir, ep
     return stats
 
 
-def main(output_dir: str = None, max_steps: int = 20):
+def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, num_episodes: int = 1):
+    """
+    Run OpenVLA inference on BridgeDataV2 episodes.
+    
+    Args:
+        output_dir: Directory to save outputs
+        max_steps: Maximum steps per episode
+        episode_index: Starting episode index (0-indexed). Each tfrecord has ~50 episodes.
+        num_episodes: Number of episodes to run from each tfrecord (starting from episode_index)
+    """
     from transformers import AutoModelForVision2Seq, AutoProcessor
     
     print("=" * 70)
-    print("OpenVLA Smoke Test - Multi-Sample BridgeDataV2 Inference")
+    print("OpenVLA Smoke Test - Multi-Episode BridgeDataV2 Inference")
     print("=" * 70)
     
     # Setup output directory
@@ -286,7 +333,9 @@ def main(output_dir: str = None, max_steps: int = 20):
     print(f"\nDevice: {device}")
     print(f"Output directory: {output_dir}")
     print(f"Max steps per episode: {max_steps}")
-    print(f"Number of samples: {len(TFRECORD_SAMPLES)}")
+    print(f"Episode index (start): {episode_index}")
+    print(f"Number of episodes to run: {num_episodes}")
+    print(f"Number of tfrecord files: {len(TFRECORD_SAMPLES)}")
     
     # Filter to existing/downloadable samples
     valid_samples = []
@@ -318,37 +367,60 @@ def main(output_dir: str = None, max_steps: int = 20):
     print("\n[3/3] Processing episodes...")
     all_stats = []
     
-    for idx, tfrecord_path in enumerate(valid_samples):
-        episode_name = os.path.basename(tfrecord_path).replace('.tfrecord', '').replace('bridge_dataset-train.', '')
-        episode_dir = output_dir / episode_name
-        episode_dir.mkdir(parents=True, exist_ok=True)
+    total_processed = 0
+    for tfrecord_idx, tfrecord_path in enumerate(valid_samples):
+        tfrecord_name = os.path.basename(tfrecord_path).replace('bridge_dataset-train.tfrecord-', '').replace('-of-01024', '')
         
-        print(f"\n{'='*70}")
-        print(f"Episode {idx+1}/{len(valid_samples)}: {episode_name}")
-        print('='*70)
-        
-        # Load episode
-        print("  Loading episode...")
-        images, gt_actions, instruction, num_steps = load_episode(tfrecord_path, max_steps)
-        if images is None:
-            print("  ERROR: Failed to load episode")
-            continue
-        print(f"  Instruction: '{instruction}'")
-        print(f"  Steps: {num_steps}")
-        
-        # Run inference
-        print("  Running inference...")
-        pred_actions = run_inference(model, processor, images, instruction, device)
-        print(f"  Inference complete!")
-        
-        # Generate plots
-        print("  Generating plots and GIF...")
-        stats = generate_plots(images, gt_actions, pred_actions, instruction, episode_dir, episode_name)
-        all_stats.append(stats)
-        
-        print(f"  Mean Position Error: {stats['mean_position_error']:.4f}")
-        print(f"  Mean Total Error: {stats['mean_total_error']:.4f}")
-        print(f"  Outputs saved to: {episode_dir}")
+        # Process multiple episodes from this tfrecord
+        for ep_offset in range(num_episodes):
+            current_episode = episode_index + ep_offset
+            
+            # Create unique episode directory
+            episode_dir_name = f"tfrecord{tfrecord_name}_episode{current_episode:03d}"
+            episode_dir = output_dir / episode_dir_name
+            episode_dir.mkdir(parents=True, exist_ok=True)
+            
+            total_processed += 1
+            print(f"\n{'='*70}")
+            print(f"Processing: tfrecord {tfrecord_name}, episode {current_episode}")
+            print('='*70)
+            
+            # Load episode
+            print(f"  Loading episode {current_episode} from tfrecord...")
+            result = load_episode(tfrecord_path, episode_index=current_episode, max_steps=max_steps)
+            images, gt_actions, instruction, num_steps, total_episodes = result
+            
+            if images is None:
+                print(f"  ERROR: Failed to load episode {current_episode}")
+                continue
+            
+            # Skip if we've exceeded available episodes
+            if current_episode >= total_episodes:
+                print(f"  Skipping: episode {current_episode} >= total episodes {total_episodes}")
+                break
+                
+            print(f"  Episode {current_episode}/{total_episodes-1} (0-indexed)")
+            print(f"  Instruction: '{instruction}'")
+            print(f"  Steps: {num_steps}")
+            
+            # Skip episodes with empty instructions if desired
+            if not instruction or instruction.strip() == '':
+                print("  WARNING: Empty instruction, using 'manipulate object'")
+                instruction = "manipulate object"
+            
+            # Run inference
+            print("  Running inference...")
+            pred_actions = run_inference(model, processor, images, instruction, device)
+            print(f"  Inference complete!")
+            
+            # Generate plots
+            print("  Generating plots and GIF...")
+            stats = generate_plots(images, gt_actions, pred_actions, instruction, episode_dir, episode_dir_name)
+            all_stats.append(stats)
+            
+            print(f"  Mean Position Error: {stats['mean_position_error']:.4f}")
+            print(f"  Mean Total Error: {stats['mean_total_error']:.4f}")
+            print(f"  Outputs saved to: {episode_dir}")
     
     # Summary
     print("\n" + "=" * 70)
@@ -377,6 +449,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="OpenVLA Multi-Sample Smoke Test")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory for plots and GIFs")
     parser.add_argument("--max_steps", type=int, default=20, help="Maximum steps per episode")
+    parser.add_argument("--episode_index", type=int, default=0, help="Starting episode index (0-indexed). Each tfrecord has ~50 episodes.")
+    parser.add_argument("--num_episodes", type=int, default=1, help="Number of episodes to run from each tfrecord (starting from episode_index)")
     args = parser.parse_args()
     
-    main(output_dir=args.output_dir, max_steps=args.max_steps)
+    main(output_dir=args.output_dir, max_steps=args.max_steps, episode_index=args.episode_index, num_episodes=args.num_episodes)

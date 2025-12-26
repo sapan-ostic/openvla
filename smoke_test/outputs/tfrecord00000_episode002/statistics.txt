@@ -1,0 +1,19 @@
+Episode: tfrecord00000_episode002
+Instruction: put the red object into the pot
+Number of steps: 10
+
+Mean Position Error: 0.0088
+Mean Rotation Error: 0.0295
+Mean Total Error: 0.0315
+
+Per-step errors:
+  Step 1: pos=0.0079, rot=0.0169, total=0.0191
+  Step 2: pos=0.0249, rot=0.0549, total=0.0604
+  Step 3: pos=0.0077, rot=0.0428, total=0.0437
+  Step 4: pos=0.0041, rot=0.0503, total=0.0506
+  Step 5: pos=0.0018, rot=0.0143, total=0.0149
+  Step 6: pos=0.0084, rot=0.0452, total=0.0461
+  Step 7: pos=0.0151, rot=0.0301, total=0.0339
+  Step 8: pos=0.0047, rot=0.0157, total=0.0169
+  Step 9: pos=0.0053, rot=0.0049, total=0.0082
+  Step 10: pos=0.0080, rot=0.0196, total=0.0215
