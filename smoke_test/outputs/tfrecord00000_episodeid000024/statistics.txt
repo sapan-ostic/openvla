@@ -1,0 +1,19 @@
+Episode: tfrecord00000_episodeid000024
+Instruction: put the rectangle block on top of the red arch and yellow block
+Number of steps: 10
+
+Mean Position Error: 0.0100
+Mean Rotation Error: 0.0430
+Mean Total Error: 0.0445
+
+Per-step errors:
+  Step 1: pos=0.0101, rot=0.0308, total=0.0326
+  Step 2: pos=0.0072, rot=0.0783, total=0.0788
+  Step 3: pos=0.0149, rot=0.0345, total=0.0378
+  Step 4: pos=0.0096, rot=0.0427, total=0.0440
+  Step 5: pos=0.0200, rot=0.0797, total=0.0823
+  Step 6: pos=0.0163, rot=0.0660, total=0.0681
+  Step 7: pos=0.0099, rot=0.0460, total=0.0472
+  Step 8: pos=0.0011, rot=0.0192, total=0.0196
+  Step 9: pos=0.0054, rot=0.0165, total=0.0178
+  Step 10: pos=0.0052, rot=0.0161, total=0.0174

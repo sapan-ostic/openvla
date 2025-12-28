@@ -1,4 +1,4 @@
-Episode: tfrecord00000_episode000
+Episode: tfrecord00000_episodeid000001
 Instruction: put small spoon from basket to tray
 Number of steps: 10
 

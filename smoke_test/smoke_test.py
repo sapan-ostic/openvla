@@ -9,6 +9,8 @@ Usage:
     python smoke_test/smoke_test.py                          # Run episode 0 from each tfrecord
     python smoke_test/smoke_test.py --num_episodes 5         # Run first 5 episodes from each tfrecord
     python smoke_test/smoke_test.py --episode_index 3        # Run episode 3 (0-indexed) from each tfrecord
+    python smoke_test/smoke_test.py --episodes 0,5,10,15     # Run specific episodes by tfrecord index
+    python smoke_test/smoke_test.py --episode_ids 1,32,15    # Run specific episodes by episode_id metadata
     python smoke_test/smoke_test.py --max_steps 20           # Limit to 20 steps per episode
     python smoke_test/smoke_test.py --output_dir ./outputs   # Custom output directory
 """
@@ -70,6 +72,44 @@ def count_episodes(tfrecord_path: str) -> int:
     for _ in raw_dataset:
         count += 1
     return count
+
+
+def build_episode_index(tfrecord_path: str) -> dict:
+    """
+    Build a mapping from episode_id to tfrecord index.
+    
+    Args:
+        tfrecord_path: Path to the tfrecord file
+    
+    Returns:
+        Dictionary mapping episode_id -> (tfrecord_index, instruction, file_path)
+    """
+    import tensorflow as tf
+    tf.config.set_visible_devices([], "GPU")
+    
+    feature_description = {
+        'episode_metadata/episode_id': tf.io.FixedLenFeature([], tf.int64),
+        'episode_metadata/file_path': tf.io.FixedLenFeature([], tf.string),
+        'steps/language_instruction': tf.io.FixedLenSequenceFeature([], tf.string, allow_missing=True),
+    }
+    
+    raw_dataset = tf.data.TFRecordDataset(tfrecord_path)
+    episode_index_map = {}
+    
+    for idx, raw_record in enumerate(raw_dataset):
+        example = tf.io.parse_single_example(raw_record, feature_description)
+        episode_id = int(example['episode_metadata/episode_id'].numpy())
+        file_path = example['episode_metadata/file_path'].numpy().decode('utf-8')
+        instructions = example['steps/language_instruction']
+        instruction = instructions[0].numpy().decode('utf-8') if len(instructions) > 0 else ''
+        
+        episode_index_map[episode_id] = {
+            'tfrecord_index': idx,
+            'instruction': instruction,
+            'file_path': file_path,
+        }
+    
+    return episode_index_map
 
 
 def load_episode(tfrecord_path: str, episode_index: int = 0, max_steps: int = 20):
@@ -305,7 +345,7 @@ def generate_plots(images, gt_actions, pred_actions, instruction, output_dir, ep
     return stats
 
 
-def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, num_episodes: int = 1):
+def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, num_episodes: int = 1, episodes: list = None, episode_ids: list = None):
     """
     Run OpenVLA inference on BridgeDataV2 episodes.
     
@@ -314,6 +354,8 @@ def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, nu
         max_steps: Maximum steps per episode
         episode_index: Starting episode index (0-indexed). Each tfrecord has ~50 episodes.
         num_episodes: Number of episodes to run from each tfrecord (starting from episode_index)
+        episodes: List of specific episode indices to run (overrides episode_index and num_episodes)
+        episode_ids: List of specific episode_ids (from metadata) to run. Will lookup tfrecord index.
     """
     from transformers import AutoModelForVision2Seq, AutoProcessor
     
@@ -330,12 +372,26 @@ def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, nu
     
     # Check for CUDA
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    
+    # Determine mode: by episode_ids, by episode indices, or by range
+    use_episode_ids = episode_ids is not None
+    
     print(f"\nDevice: {device}")
     print(f"Output directory: {output_dir}")
     print(f"Max steps per episode: {max_steps}")
-    print(f"Episode index (start): {episode_index}")
-    print(f"Number of episodes to run: {num_episodes}")
-    print(f"Number of tfrecord files: {len(TFRECORD_SAMPLES)}")
+    
+    if use_episode_ids:
+        print(f"Episode IDs to run: {episode_ids}")
+        print(f"(Will lookup tfrecord indices from episode metadata)")
+    elif episodes is not None:
+        episode_list = episodes
+        print(f"Episode indices to run: {episode_list}")
+    else:
+        episode_list = list(range(episode_index, episode_index + num_episodes))
+        print(f"Episode index (start): {episode_index}")
+        print(f"Number of episodes to run: {num_episodes}")
+        print(f"Episode indices to run: {episode_list}")
+        print(f"Number of tfrecord files: {len(TFRECORD_SAMPLES)}")
     
     # Filter to existing/downloadable samples
     valid_samples = []
@@ -371,18 +427,45 @@ def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, nu
     for tfrecord_idx, tfrecord_path in enumerate(valid_samples):
         tfrecord_name = os.path.basename(tfrecord_path).replace('bridge_dataset-train.tfrecord-', '').replace('-of-01024', '')
         
-        # Process multiple episodes from this tfrecord
-        for ep_offset in range(num_episodes):
-            current_episode = episode_index + ep_offset
+        # Build episode index if using episode_ids
+        if use_episode_ids:
+            print(f"\n  Building episode index for tfrecord {tfrecord_name}...")
+            ep_index_map = build_episode_index(tfrecord_path)
+            available_ids = set(ep_index_map.keys())
+            
+            # Find which requested episode_ids are in this tfrecord
+            episodes_to_process = []
+            for ep_id in episode_ids:
+                if ep_id in available_ids:
+                    episodes_to_process.append((ep_id, ep_index_map[ep_id]))
+            
+            if not episodes_to_process:
+                print(f"  No requested episode_ids found in tfrecord {tfrecord_name}")
+                continue
+            
+            print(f"  Found {len(episodes_to_process)} matching episodes: {[e[0] for e in episodes_to_process]}")
+        else:
+            # Use episode indices directly
+            episodes_to_process = [(idx, {'tfrecord_index': idx}) for idx in episode_list]
+        
+        # Process episodes from this tfrecord
+        for ep_id_or_idx, ep_info in episodes_to_process:
+            current_episode = ep_info['tfrecord_index']
             
             # Create unique episode directory
-            episode_dir_name = f"tfrecord{tfrecord_name}_episode{current_episode:03d}"
+            if use_episode_ids:
+                episode_dir_name = f"tfrecord{tfrecord_name}_episodeid{ep_id_or_idx:06d}"
+            else:
+                episode_dir_name = f"tfrecord{tfrecord_name}_episode{current_episode:03d}"
             episode_dir = output_dir / episode_dir_name
             episode_dir.mkdir(parents=True, exist_ok=True)
             
             total_processed += 1
             print(f"\n{'='*70}")
-            print(f"Processing: tfrecord {tfrecord_name}, episode {current_episode}")
+            if use_episode_ids:
+                print(f"Processing: tfrecord {tfrecord_name}, episode_id {ep_id_or_idx} (index {current_episode})")
+            else:
+                print(f"Processing: tfrecord {tfrecord_name}, episode index {current_episode}")
             print('='*70)
             
             # Load episode
@@ -451,6 +534,19 @@ if __name__ == "__main__":
     parser.add_argument("--max_steps", type=int, default=20, help="Maximum steps per episode")
     parser.add_argument("--episode_index", type=int, default=0, help="Starting episode index (0-indexed). Each tfrecord has ~50 episodes.")
     parser.add_argument("--num_episodes", type=int, default=1, help="Number of episodes to run from each tfrecord (starting from episode_index)")
+    parser.add_argument("--episodes", type=str, default=None, help="Comma-separated list of specific episode indices to run (e.g., '0,5,10,15').")
+    parser.add_argument("--episode_ids", type=str, default=None, help="Comma-separated list of episode_ids from metadata (e.g., '1,32,15'). Looks up the actual tfrecord index.")
     args = parser.parse_args()
     
-    main(output_dir=args.output_dir, max_steps=args.max_steps, episode_index=args.episode_index, num_episodes=args.num_episodes)
+    # Parse episodes list if provided
+    episodes_list = None
+    if args.episodes is not None:
+        episodes_list = [int(x.strip()) for x in args.episodes.split(',')]
+    
+    # Parse episode_ids list if provided
+    episode_ids_list = None
+    if args.episode_ids is not None:
+        episode_ids_list = [int(x.strip()) for x in args.episode_ids.split(',')]
+    
+    main(output_dir=args.output_dir, max_steps=args.max_steps, episode_index=args.episode_index, 
+         num_episodes=args.num_episodes, episodes=episodes_list, episode_ids=episode_ids_list)

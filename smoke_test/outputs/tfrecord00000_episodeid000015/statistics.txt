@@ -1,0 +1,19 @@
+Episode: tfrecord00000_episodeid000015
+Instruction: open the drawer
+Number of steps: 10
+
+Mean Position Error: 0.0073
+Mean Rotation Error: 0.0554
+Mean Total Error: 0.0563
+
+Per-step errors:
+  Step 1: pos=0.0202, rot=0.1629, total=0.1642
+  Step 2: pos=0.0043, rot=0.0986, total=0.0988
+  Step 3: pos=0.0086, rot=0.0617, total=0.0624
+  Step 4: pos=0.0038, rot=0.0663, total=0.0665
+  Step 5: pos=0.0082, rot=0.0437, total=0.0446
+  Step 6: pos=0.0070, rot=0.0499, total=0.0506
+  Step 7: pos=0.0064, rot=0.0141, total=0.0160
+  Step 8: pos=0.0074, rot=0.0250, total=0.0264
+  Step 9: pos=0.0047, rot=0.0124, total=0.0133
+  Step 10: pos=0.0027, rot=0.0196, total=0.0197

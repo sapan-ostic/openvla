@@ -1,0 +1,19 @@
+Episode: tfrecord00000_episodeid000038
+Instruction: take broccoli out of pan
+Number of steps: 10
+
+Mean Position Error: 0.0139
+Mean Rotation Error: 0.0436
+Mean Total Error: 0.0464
+
+Per-step errors:
+  Step 1: pos=0.0184, rot=0.0787, total=0.0809
+  Step 2: pos=0.0370, rot=0.0716, total=0.0807
+  Step 3: pos=0.0097, rot=0.0299, total=0.0317
+  Step 4: pos=0.0189, rot=0.0256, total=0.0321
+  Step 5: pos=0.0163, rot=0.0555, total=0.0580
+  Step 6: pos=0.0050, rot=0.0263, total=0.0271
+  Step 7: pos=0.0100, rot=0.0437, total=0.0450
+  Step 8: pos=0.0147, rot=0.0605, total=0.0623
+  Step 9: pos=0.0041, rot=0.0245, total=0.0251
+  Step 10: pos=0.0048, rot=0.0197, total=0.0207
