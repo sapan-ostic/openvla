@@ -41,6 +41,7 @@ EMBODIMENT_CONFIGS = {
         "unnorm_key": "bridge_orig",  # Use built-in normalization stats
         "custom_stats_file": None,    # No custom stats needed
         "download_url": "https://rail.eecs.berkeley.edu/datasets/bridge_release/data/tfds/bridge_dataset/1.0.0/",
+        "data_hz": 5,                 # Data recording frequency
     },
     "so101": {
         "name": "SO101 Robot",
@@ -50,11 +51,15 @@ EMBODIMENT_CONFIGS = {
         "unnorm_key": "so101",        # Use custom normalization stats
         "custom_stats_file": "so101_norm_stats.json",  # Load from this file
         "download_url": None,         # No auto-download available
+        "data_hz": 15,                # Data recording frequency
     },
 }
 
 # Default embodiment
 DEFAULT_EMBODIMENT = "so101"
+
+# Target frequency for inference (OpenVLA was trained on ~5Hz data)
+DEFAULT_TARGET_HZ = 5
 # ============================================================================
 
 
@@ -95,6 +100,85 @@ def count_episodes(tfrecord_path: str) -> int:
     return count
 
 
+def compute_norm_stats(tfrecord_paths: list, downsample_factor: int = 1) -> dict:
+    """
+    Compute normalization statistics from tfrecord files with optional downsampling.
+    
+    Args:
+        tfrecord_paths: List of tfrecord file paths
+        downsample_factor: Downsample factor (actions are summed between frames)
+    
+    Returns:
+        Dictionary with normalization statistics in OpenVLA format
+    """
+    import tensorflow as tf
+    tf.config.set_visible_devices([], "GPU")
+    
+    feature_description = {
+        'steps/action': tf.io.FixedLenSequenceFeature([7], tf.float32, allow_missing=True),
+    }
+    
+    all_actions = []
+    num_episodes = 0
+    num_transitions = 0
+    
+    for tfrecord_path in tfrecord_paths:
+        if not os.path.exists(tfrecord_path):
+            continue
+            
+        raw_dataset = tf.data.TFRecordDataset(tfrecord_path)
+        
+        for raw_record in raw_dataset:
+            example = tf.io.parse_single_example(raw_record, feature_description)
+            actions_raw = example['steps/action'].numpy()
+            num_episodes += 1
+            
+            if downsample_factor > 1:
+                # Apply downsampling: sum actions between frames
+                downsampled_actions = []
+                for i in range(0, len(actions_raw), downsample_factor):
+                    end_idx = min(i + downsample_factor, len(actions_raw))
+                    summed_action = np.sum(actions_raw[i:end_idx], axis=0)
+                    # For gripper, use last value (it's a state, not delta)
+                    summed_action[6] = actions_raw[end_idx - 1, 6]
+                    downsampled_actions.append(summed_action)
+                actions = np.array(downsampled_actions)
+            else:
+                actions = actions_raw
+            
+            all_actions.append(actions)
+            num_transitions += len(actions)
+    
+    # Stack all actions
+    all_actions = np.vstack(all_actions)
+    
+    # Compute statistics
+    stats = {
+        'action': {
+            'mean': all_actions.mean(axis=0).tolist(),
+            'std': all_actions.std(axis=0).tolist(),
+            'min': all_actions.min(axis=0).tolist(),
+            'max': all_actions.max(axis=0).tolist(),
+            'q01': np.percentile(all_actions, 1, axis=0).tolist(),
+            'q99': np.percentile(all_actions, 99, axis=0).tolist(),
+            # Mask: True for dimensions to normalize, False for gripper (last dim)
+            'mask': [True, True, True, True, True, True, False],
+        },
+        'num_trajectories': num_episodes,
+        'num_transitions': num_transitions,
+        'proprio': {
+            'mean': [0.0] * 7,
+            'std': [0.0] * 7,
+            'min': [0.0] * 7,
+            'max': [0.0] * 7,
+            'q01': [0.0] * 7,
+            'q99': [0.0] * 7,
+        }
+    }
+    
+    return stats
+
+
 def build_episode_index(tfrecord_path: str) -> dict:
     """
     Build a mapping from episode_id to tfrecord index.
@@ -133,14 +217,16 @@ def build_episode_index(tfrecord_path: str) -> dict:
     return episode_index_map
 
 
-def load_episode(tfrecord_path: str, episode_index: int = 0, max_steps: int = 20):
+def load_episode(tfrecord_path: str, episode_index: int = 0, max_steps: int = 20, downsample_factor: int = 1):
     """
-    Load a specific episode from BridgeDataV2 tfrecord file.
+    Load a specific episode from tfrecord file with optional downsampling.
     
     Args:
         tfrecord_path: Path to the tfrecord file
         episode_index: Which episode to load (0-indexed). Each tfrecord contains ~50 episodes.
-        max_steps: Maximum number of steps to load from the episode
+        max_steps: Maximum number of steps to load from the episode (after downsampling)
+        downsample_factor: Take every Nth frame. Actions between frames are summed.
+                          E.g., factor=3 converts 15Hz -> 5Hz data.
     
     Returns:
         images, gt_actions, instruction, num_steps, total_episodes
@@ -167,18 +253,45 @@ def load_episode(tfrecord_path: str, episode_index: int = 0, max_steps: int = 20
         if idx == episode_index:
             example = tf.io.parse_single_example(raw_record, feature_description)
             images_raw = example['steps/observation/image_0']
-            actions_raw = example['steps/action']
+            actions_raw = example['steps/action'].numpy()
             instructions = example['steps/language_instruction']
             
             instruction = instructions[0].numpy().decode('utf-8') if len(instructions) > 0 else "manipulate object"
-            num_steps = min(max_steps, len(images_raw))
             
-            images = []
-            gt_actions = []
-            for i in range(num_steps):
-                img = tf.io.decode_jpeg(images_raw[i])
-                images.append(Image.fromarray(img.numpy()))
-                gt_actions.append(actions_raw[i].numpy())
+            # Apply downsampling
+            if downsample_factor > 1:
+                # Take every Nth image
+                images = []
+                gt_actions = []
+                total_raw_steps = len(images_raw)
+                
+                for i in range(0, total_raw_steps, downsample_factor):
+                    if len(images) >= max_steps:
+                        break
+                    
+                    # Decode image at this timestep
+                    img = tf.io.decode_jpeg(images_raw[i])
+                    images.append(Image.fromarray(img.numpy()))
+                    
+                    # Sum actions from i to i+downsample_factor (the delta between downsampled frames)
+                    end_idx = min(i + downsample_factor, total_raw_steps)
+                    summed_action = np.sum(actions_raw[i:end_idx], axis=0)
+                    
+                    # For gripper, use the last value instead of sum (it's a state, not delta)
+                    summed_action[6] = actions_raw[end_idx - 1, 6]
+                    
+                    gt_actions.append(summed_action)
+                
+                num_steps = len(images)
+            else:
+                # No downsampling
+                num_steps = min(max_steps, len(images_raw))
+                images = []
+                gt_actions = []
+                for i in range(num_steps):
+                    img = tf.io.decode_jpeg(images_raw[i])
+                    images.append(Image.fromarray(img.numpy()))
+                    gt_actions.append(actions_raw[i])
             
             target_data = (images, np.array(gt_actions), instruction, num_steps)
     
@@ -367,18 +480,20 @@ def generate_plots(images, gt_actions, pred_actions, instruction, output_dir, ep
 
 
 def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, num_episodes: int = 1, 
-         episodes: list = None, episode_ids: list = None, embodiment: str = DEFAULT_EMBODIMENT):
+         episodes: list = None, episode_ids: list = None, embodiment: str = DEFAULT_EMBODIMENT,
+         target_hz: int = DEFAULT_TARGET_HZ):
     """
     Run OpenVLA inference on robot episodes.
     
     Args:
         output_dir: Directory to save outputs
-        max_steps: Maximum steps per episode
+        max_steps: Maximum steps per episode (after downsampling)
         episode_index: Starting episode index (0-indexed). Each tfrecord has ~50 episodes.
         num_episodes: Number of episodes to run from each tfrecord (starting from episode_index)
         episodes: List of specific episode indices to run (overrides episode_index and num_episodes)
         episode_ids: List of specific episode_ids (from metadata) to run. Will lookup tfrecord index.
         embodiment: Which robot embodiment to use ("bridge" or "so101")
+        target_hz: Target frequency for inference (OpenVLA trained on ~5Hz). Data will be downsampled.
     """
     from transformers import AutoModelForVision2Seq, AutoProcessor
     
@@ -392,6 +507,11 @@ def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, nu
     unnorm_key = config["unnorm_key"]
     custom_stats_file = config["custom_stats_file"]
     download_url = config["download_url"]
+    data_hz = config.get("data_hz", 5)
+    
+    # Compute downsampling factor
+    downsample_factor = max(1, round(data_hz / target_hz))
+    effective_hz = data_hz / downsample_factor
     
     print("=" * 70)
     print(f"OpenVLA Smoke Test - {config['name']}")
@@ -414,6 +534,10 @@ def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, nu
     print(f"Device: {device}")
     print(f"Output directory: {output_dir}")
     print(f"Max steps per episode: {max_steps}")
+    if downsample_factor > 1:
+        print(f"Downsampling: {data_hz}Hz -> {effective_hz:.1f}Hz (factor={downsample_factor})")
+    else:
+        print(f"Data frequency: {data_hz}Hz (no downsampling needed)")
     
     if use_episode_ids:
         print(f"Episode IDs to run: {episode_ids}")
@@ -430,7 +554,7 @@ def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, nu
     
     # Filter to existing/downloadable samples
     valid_samples = []
-    print("\n[1/3] Checking samples...")
+    print("\n[1/4] Checking samples...")
     for tfrecord_path in tfrecord_samples:
         if download_if_missing(tfrecord_path, download_url):
             valid_samples.append(tfrecord_path)
@@ -443,8 +567,19 @@ def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, nu
     
     print(f"      Found {len(valid_samples)} valid samples")
     
-    # Load model once
-    print("\n[2/3] Loading OpenVLA model (openvla/openvla-7b)...")
+    # Compute normalization stats if using custom unnorm_key (not built-in)
+    if unnorm_key not in ["bridge_orig"]:  # Add other built-in keys here if needed
+        print(f"\n[2/4] Computing normalization stats for '{unnorm_key}' (downsample_factor={downsample_factor})...")
+        computed_stats = compute_norm_stats(valid_samples, downsample_factor=downsample_factor)
+        print(f"      Computed from {computed_stats['num_trajectories']} episodes, {computed_stats['num_transitions']} transitions")
+        print(f"      Action q01: [{', '.join([f'{x:.4f}' for x in computed_stats['action']['q01']])}]")
+        print(f"      Action q99: [{', '.join([f'{x:.4f}' for x in computed_stats['action']['q99']])}]")
+    else:
+        computed_stats = None
+        print(f"\n[2/4] Using built-in normalization stats: {unnorm_key}")
+    
+    # Load model
+    print("\n[3/4] Loading OpenVLA model (openvla/openvla-7b)...")
     processor = AutoProcessor.from_pretrained('openvla/openvla-7b', trust_remote_code=True)
     model = AutoModelForVision2Seq.from_pretrained(
         'openvla/openvla-7b',
@@ -454,26 +589,14 @@ def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, nu
     ).to(device)
     print("      Model loaded!")
     
-    # Load and inject custom normalization stats if needed
-    if custom_stats_file:
-        stats_path = Path(__file__).parent / custom_stats_file
-        if stats_path.exists():
-            with open(stats_path, 'r') as f:
-                custom_stats = json.load(f)
-            # Inject custom stats into model's norm_stats
-            for key, stats in custom_stats.items():
-                model.norm_stats[key] = stats
-                print(f"      Injected '{key}' normalization stats into model")
-            print(f"      Using unnorm_key: {unnorm_key}")
-        else:
-            print(f"      WARNING: Custom stats file not found: {stats_path}")
-            print(f"      Falling back to bridge_orig normalization")
-            unnorm_key = "bridge_orig"
-    else:
-        print(f"      Using built-in unnorm_key: {unnorm_key}")
+    # Inject computed normalization stats if needed
+    if computed_stats is not None:
+        model.norm_stats[unnorm_key] = computed_stats
+        print(f"      Injected '{unnorm_key}' normalization stats into model")
+    print(f"      Using unnorm_key: {unnorm_key}")
     
     # Process each sample
-    print("\n[3/3] Processing episodes...")
+    print("\n[4/4] Processing episodes...")
     all_stats = []
     
     total_processed = 0
@@ -523,7 +646,8 @@ def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, nu
             
             # Load episode
             print(f"  Loading episode {current_episode} from tfrecord...")
-            result = load_episode(tfrecord_path, episode_index=current_episode, max_steps=max_steps)
+            result = load_episode(tfrecord_path, episode_index=current_episode, max_steps=max_steps, 
+                                  downsample_factor=downsample_factor)
             images, gt_actions, instruction, num_steps, total_episodes = result
             
             if images is None:
@@ -592,6 +716,8 @@ if __name__ == "__main__":
     parser.add_argument("--num_episodes", type=int, default=1, help="Number of episodes to run from each tfrecord (starting from episode_index)")
     parser.add_argument("--episodes", type=str, default=None, help="Comma-separated list of specific episode indices to run (e.g., '0,5,10,15').")
     parser.add_argument("--episode_ids", type=str, default=None, help="Comma-separated list of episode_ids from metadata (e.g., '1,32,15'). Looks up the actual tfrecord index.")
+    parser.add_argument("--target_hz", type=int, default=DEFAULT_TARGET_HZ, 
+                        help=f"Target frequency for inference. Data will be downsampled to match. (default: {DEFAULT_TARGET_HZ}Hz)")
     args = parser.parse_args()
     
     # Parse episodes list if provided
@@ -606,4 +732,4 @@ if __name__ == "__main__":
     
     main(output_dir=args.output_dir, max_steps=args.max_steps, episode_index=args.episode_index, 
          num_episodes=args.num_episodes, episodes=episodes_list, episode_ids=episode_ids_list,
-         embodiment=args.embodiment)
+         embodiment=args.embodiment, target_hz=args.target_hz)

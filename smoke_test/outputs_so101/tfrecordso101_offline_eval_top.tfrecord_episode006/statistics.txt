@@ -1,0 +1,84 @@
+Episode: tfrecordso101_offline_eval_top.tfrecord_episode006
+Instruction: put the potato into the bowl
+Number of steps: 75
+
+Mean Position Error: 0.0140
+Mean Rotation Error: 0.0546
+Mean Total Error: 0.2627
+
+Per-step errors:
+  Step 1: pos=0.0215, rot=0.1084, total=0.1105
+  Step 2: pos=0.0550, rot=0.3448, total=0.3491
+  Step 3: pos=0.0228, rot=0.1178, total=0.1200
+  Step 4: pos=0.0141, rot=0.0880, total=0.0892
+  Step 5: pos=0.0088, rot=0.0767, total=0.0773
+  Step 6: pos=0.0251, rot=0.1469, total=0.1491
+  Step 7: pos=0.0224, rot=0.0815, total=0.0846
+  Step 8: pos=0.0119, rot=0.0779, total=0.0789
+  Step 9: pos=0.0184, rot=0.1294, total=0.1307
+  Step 10: pos=0.0072, rot=0.0995, total=0.0999
+  Step 11: pos=0.0151, rot=0.0580, total=0.0601
+  Step 12: pos=0.0129, rot=0.0905, total=0.0915
+  Step 13: pos=0.0116, rot=0.0298, total=0.0323
+  Step 14: pos=0.0104, rot=0.0414, total=0.0429
+  Step 15: pos=0.0154, rot=0.1060, total=0.1072
+  Step 16: pos=0.0146, rot=0.1091, total=0.1102
+  Step 17: pos=0.0137, rot=0.0343, total=0.0372
+  Step 18: pos=0.0108, rot=0.0247, total=0.0273
+  Step 19: pos=0.0094, rot=0.1035, total=0.1040
+  Step 20: pos=0.0082, rot=0.0810, total=0.0815
+  Step 21: pos=0.0087, rot=0.0180, total=0.0204
+  Step 22: pos=0.0106, rot=0.0398, total=0.0414
+  Step 23: pos=0.0190, rot=0.0199, total=0.0278
+  Step 24: pos=0.0147, rot=0.0265, total=0.0306
+  Step 25: pos=0.0063, rot=0.0176, total=0.0191
+  Step 26: pos=0.0051, rot=0.1109, total=0.1110
+  Step 27: pos=0.0105, rot=0.0269, total=0.0292
+  Step 28: pos=0.0041, rot=0.0095, total=0.0110
+  Step 29: pos=0.0091, rot=0.0227, total=0.0248
+  Step 30: pos=0.0081, rot=0.0262, total=0.0277
+  Step 31: pos=0.0063, rot=0.0127, total=0.9962
+  Step 32: pos=0.0059, rot=0.0194, total=0.9963
+  Step 33: pos=0.0104, rot=0.0229, total=0.9964
+  Step 34: pos=0.0048, rot=0.0927, total=1.0004
+  Step 35: pos=0.0046, rot=0.0480, total=0.9972
+  Step 36: pos=0.0096, rot=0.0236, total=0.9964
+  Step 37: pos=0.0074, rot=0.0328, total=0.9966
+  Step 38: pos=0.0157, rot=0.0453, total=0.0480
+  Step 39: pos=0.0066, rot=0.0103, total=0.9962
+  Step 40: pos=0.0094, rot=0.0203, total=0.0224
+  Step 41: pos=0.0210, rot=0.0539, total=0.0578
+  Step 42: pos=0.0201, rot=0.0595, total=0.0628
+  Step 43: pos=0.0097, rot=0.0746, total=0.0752
+  Step 44: pos=0.0146, rot=0.0443, total=0.0467
+  Step 45: pos=0.0149, rot=0.1381, total=0.1389
+  Step 46: pos=0.0313, rot=0.0193, total=0.0368
+  Step 47: pos=0.0235, rot=0.0853, total=0.0885
+  Step 48: pos=0.0124, rot=0.0321, total=0.0344
+  Step 49: pos=0.0075, rot=0.0356, total=0.0364
+  Step 50: pos=0.0097, rot=0.0080, total=0.0125
+  Step 51: pos=0.0033, rot=0.0327, total=0.0328
+  Step 52: pos=0.0045, rot=0.0195, total=0.9963
+  Step 53: pos=0.0108, rot=0.0389, total=0.0404
+  Step 54: pos=0.0040, rot=0.0366, total=0.9968
+  Step 55: pos=0.0131, rot=0.0306, total=0.9966
+  Step 56: pos=0.0071, rot=0.0375, total=0.9968
+  Step 57: pos=0.0049, rot=0.0060, total=0.0077
+  Step 58: pos=0.0065, rot=0.0353, total=0.0359
+  Step 59: pos=0.0083, rot=0.0243, total=0.9964
+  Step 60: pos=0.0061, rot=0.0174, total=0.0189
+  Step 61: pos=0.0100, rot=0.0378, total=0.0393
+  Step 62: pos=0.0098, rot=0.0316, total=0.0333
+  Step 63: pos=0.0148, rot=0.0842, total=0.9997
+  Step 64: pos=0.0205, rot=0.0197, total=0.9965
+  Step 65: pos=0.0212, rot=0.0404, total=0.0456
+  Step 66: pos=0.0151, rot=0.0141, total=0.9963
+  Step 67: pos=0.0278, rot=0.0469, total=0.0545
+  Step 68: pos=0.0292, rot=0.0221, total=0.0366
+  Step 69: pos=0.0164, rot=0.0103, total=0.0194
+  Step 70: pos=0.0179, rot=0.0180, total=0.0254
+  Step 71: pos=0.0363, rot=0.0532, total=0.0645
+  Step 72: pos=0.0270, rot=0.0800, total=0.0844
+  Step 73: pos=0.0206, rot=0.0469, total=0.0512
+  Step 74: pos=0.0275, rot=0.0808, total=0.0853
+  Step 75: pos=0.0192, rot=0.0856, total=0.0877
