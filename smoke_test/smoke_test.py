@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
 """
-OpenVLA Smoke Test: Multi-sample inference script with BridgeDataV2.
+OpenVLA Smoke Test: Multi-sample inference script for different robot embodiments.
 
-Loads openvla-7b model and runs inference on episodes from BridgeDataV2 dataset.
+Loads openvla-7b model and runs inference on episodes from robot datasets.
 Generates comparison plots and GIFs for each episode.
 
 Usage:
-    python smoke_test/smoke_test.py                          # Run episode 0 from each tfrecord
-    python smoke_test/smoke_test.py --num_episodes 5         # Run first 5 episodes from each tfrecord
-    python smoke_test/smoke_test.py --episode_index 3        # Run episode 3 (0-indexed) from each tfrecord
-    python smoke_test/smoke_test.py --episodes 0,5,10,15     # Run specific episodes by tfrecord index
-    python smoke_test/smoke_test.py --episode_ids 1,32,15    # Run specific episodes by episode_id metadata
-    python smoke_test/smoke_test.py --max_steps 20           # Limit to 20 steps per episode
-    python smoke_test/smoke_test.py --output_dir ./outputs   # Custom output directory
+    python smoke_test/smoke_test.py --embodiment bridge       # Use BridgeData V2 (WidowX)
+    python smoke_test/smoke_test.py --embodiment so101        # Use SO101 dataset
+    python smoke_test/smoke_test.py --num_episodes 5          # Run first 5 episodes from each tfrecord
+    python smoke_test/smoke_test.py --episode_index 3         # Run episode 3 (0-indexed) from each tfrecord
+    python smoke_test/smoke_test.py --episodes 0,5,10,15      # Run specific episodes by tfrecord index
+    python smoke_test/smoke_test.py --episode_ids 1,32,15     # Run specific episodes by episode_id metadata
+    python smoke_test/smoke_test.py --max_steps 20            # Limit to 20 steps per episode
+    python smoke_test/smoke_test.py --output_dir ./outputs    # Custom output directory
 """
 
 import os
+import json
 import numpy as np
 import torch
 from PIL import Image
@@ -28,26 +30,45 @@ import matplotlib.animation as animation
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 
 # ============================================================================
-# CONFIGURATION - Add/remove tfrecord files here
+# EMBODIMENT CONFIGURATIONS
 # ============================================================================
-TFRECORD_SAMPLES = [
-    "/home/sapan-alienware/datasets/rlds/bridge_orig/1.0.0/bridge_dataset-train.tfrecord-00000-of-01024",
-    # Add more samples here:
-    # "/path/to/bridge_dataset-train.tfrecord-00002-of-01024",
-]
+EMBODIMENT_CONFIGS = {
+    "bridge": {
+        "name": "BridgeData V2 (WidowX)",
+        "tfrecord_samples": [
+            "/home/sapan-alienware/datasets/rlds/bridge_orig/1.0.0/bridge_dataset-train.tfrecord-00000-of-01024",
+        ],
+        "unnorm_key": "bridge_orig",  # Use built-in normalization stats
+        "custom_stats_file": None,    # No custom stats needed
+        "download_url": "https://rail.eecs.berkeley.edu/datasets/bridge_release/data/tfds/bridge_dataset/1.0.0/",
+    },
+    "so101": {
+        "name": "SO101 Robot",
+        "tfrecord_samples": [
+            "/home/sapan-alienware/Downloads/so101_offline_eval_top.tfrecord",
+        ],
+        "unnorm_key": "so101",        # Use custom normalization stats
+        "custom_stats_file": "so101_norm_stats.json",  # Load from this file
+        "download_url": None,         # No auto-download available
+    },
+}
 
-# Base URL for downloading missing samples
-TFRECORD_BASE_URL = "https://rail.eecs.berkeley.edu/datasets/bridge_release/data/tfds/bridge_dataset/1.0.0/"
+# Default embodiment
+DEFAULT_EMBODIMENT = "so101"
 # ============================================================================
 
 
-def download_if_missing(tfrecord_path: str) -> bool:
+def download_if_missing(tfrecord_path: str, download_url: str = None) -> bool:
     """Download tfrecord if it doesn't exist."""
     if os.path.exists(tfrecord_path):
         return True
     
+    if download_url is None:
+        print(f"      File not found: {tfrecord_path}")
+        return False
+    
     filename = os.path.basename(tfrecord_path)
-    url = TFRECORD_BASE_URL + filename
+    url = download_url + filename
     
     print(f"      Downloading {filename}...")
     os.makedirs(os.path.dirname(tfrecord_path), exist_ok=True)
@@ -171,7 +192,7 @@ def load_episode(tfrecord_path: str, episode_index: int = 0, max_steps: int = 20
     return images, gt_actions, instruction, num_steps, total_episodes
 
 
-def run_inference(model, processor, images, instruction, device):
+def run_inference(model, processor, images, instruction, device, unnorm_key="bridge_orig"):
     """Run inference on all images in episode."""
     pred_actions = []
     prompt = f"In: What action should the robot take to {instruction.lower()}?\nOut:"
@@ -182,7 +203,7 @@ def run_inference(model, processor, images, instruction, device):
             del inputs['attention_mask']
         
         with torch.no_grad():
-            action = model.predict_action(**inputs, unnorm_key="bridge_orig", do_sample=False)
+            action = model.predict_action(**inputs, unnorm_key=unnorm_key, do_sample=False)
         pred_actions.append(action)
     
     return np.array(pred_actions)
@@ -345,9 +366,10 @@ def generate_plots(images, gt_actions, pred_actions, instruction, output_dir, ep
     return stats
 
 
-def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, num_episodes: int = 1, episodes: list = None, episode_ids: list = None):
+def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, num_episodes: int = 1, 
+         episodes: list = None, episode_ids: list = None, embodiment: str = DEFAULT_EMBODIMENT):
     """
-    Run OpenVLA inference on BridgeDataV2 episodes.
+    Run OpenVLA inference on robot episodes.
     
     Args:
         output_dir: Directory to save outputs
@@ -356,16 +378,28 @@ def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, nu
         num_episodes: Number of episodes to run from each tfrecord (starting from episode_index)
         episodes: List of specific episode indices to run (overrides episode_index and num_episodes)
         episode_ids: List of specific episode_ids (from metadata) to run. Will lookup tfrecord index.
+        embodiment: Which robot embodiment to use ("bridge" or "so101")
     """
     from transformers import AutoModelForVision2Seq, AutoProcessor
     
+    # Get embodiment configuration
+    if embodiment not in EMBODIMENT_CONFIGS:
+        print(f"ERROR: Unknown embodiment '{embodiment}'. Available: {list(EMBODIMENT_CONFIGS.keys())}")
+        return
+    
+    config = EMBODIMENT_CONFIGS[embodiment]
+    tfrecord_samples = config["tfrecord_samples"]
+    unnorm_key = config["unnorm_key"]
+    custom_stats_file = config["custom_stats_file"]
+    download_url = config["download_url"]
+    
     print("=" * 70)
-    print("OpenVLA Smoke Test - Multi-Episode BridgeDataV2 Inference")
+    print(f"OpenVLA Smoke Test - {config['name']}")
     print("=" * 70)
     
     # Setup output directory
     if output_dir is None:
-        output_dir = Path(__file__).parent / "outputs"
+        output_dir = Path(__file__).parent / f"outputs_{embodiment}"
     else:
         output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -376,7 +410,8 @@ def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, nu
     # Determine mode: by episode_ids, by episode indices, or by range
     use_episode_ids = episode_ids is not None
     
-    print(f"\nDevice: {device}")
+    print(f"\nEmbodiment: {embodiment} ({config['name']})")
+    print(f"Device: {device}")
     print(f"Output directory: {output_dir}")
     print(f"Max steps per episode: {max_steps}")
     
@@ -391,13 +426,13 @@ def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, nu
         print(f"Episode index (start): {episode_index}")
         print(f"Number of episodes to run: {num_episodes}")
         print(f"Episode indices to run: {episode_list}")
-        print(f"Number of tfrecord files: {len(TFRECORD_SAMPLES)}")
+        print(f"Number of tfrecord files: {len(tfrecord_samples)}")
     
     # Filter to existing/downloadable samples
     valid_samples = []
     print("\n[1/3] Checking samples...")
-    for tfrecord_path in TFRECORD_SAMPLES:
-        if download_if_missing(tfrecord_path):
+    for tfrecord_path in tfrecord_samples:
+        if download_if_missing(tfrecord_path, download_url):
             valid_samples.append(tfrecord_path)
         else:
             print(f"      Skipping: {tfrecord_path}")
@@ -418,6 +453,24 @@ def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, nu
         trust_remote_code=True,
     ).to(device)
     print("      Model loaded!")
+    
+    # Load and inject custom normalization stats if needed
+    if custom_stats_file:
+        stats_path = Path(__file__).parent / custom_stats_file
+        if stats_path.exists():
+            with open(stats_path, 'r') as f:
+                custom_stats = json.load(f)
+            # Inject custom stats into model's norm_stats
+            for key, stats in custom_stats.items():
+                model.norm_stats[key] = stats
+                print(f"      Injected '{key}' normalization stats into model")
+            print(f"      Using unnorm_key: {unnorm_key}")
+        else:
+            print(f"      WARNING: Custom stats file not found: {stats_path}")
+            print(f"      Falling back to bridge_orig normalization")
+            unnorm_key = "bridge_orig"
+    else:
+        print(f"      Using built-in unnorm_key: {unnorm_key}")
     
     # Process each sample
     print("\n[3/3] Processing episodes...")
@@ -493,7 +546,7 @@ def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, nu
             
             # Run inference
             print("  Running inference...")
-            pred_actions = run_inference(model, processor, images, instruction, device)
+            pred_actions = run_inference(model, processor, images, instruction, device, unnorm_key=unnorm_key)
             print(f"  Inference complete!")
             
             # Generate plots
@@ -530,6 +583,9 @@ def main(output_dir: str = None, max_steps: int = 20, episode_index: int = 0, nu
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="OpenVLA Multi-Sample Smoke Test")
+    parser.add_argument("--embodiment", type=str, default=DEFAULT_EMBODIMENT, 
+                        choices=list(EMBODIMENT_CONFIGS.keys()),
+                        help=f"Robot embodiment to use. Available: {list(EMBODIMENT_CONFIGS.keys())}")
     parser.add_argument("--output_dir", type=str, default=None, help="Output directory for plots and GIFs")
     parser.add_argument("--max_steps", type=int, default=20, help="Maximum steps per episode")
     parser.add_argument("--episode_index", type=int, default=0, help="Starting episode index (0-indexed). Each tfrecord has ~50 episodes.")
@@ -549,4 +605,5 @@ if __name__ == "__main__":
         episode_ids_list = [int(x.strip()) for x in args.episode_ids.split(',')]
     
     main(output_dir=args.output_dir, max_steps=args.max_steps, episode_index=args.episode_index, 
-         num_episodes=args.num_episodes, episodes=episodes_list, episode_ids=episode_ids_list)
+         num_episodes=args.num_episodes, episodes=episodes_list, episode_ids=episode_ids_list,
+         embodiment=args.embodiment)
